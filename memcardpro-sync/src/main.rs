@@ -18,7 +18,7 @@ use thiserror::Error;
 enum MemcardError {
     #[error("IO error")]
     CommandError(#[from] io::Error),
-    #[error("mcd file doesn't expected naming convention")]
+    #[error("mcd file doesn't match expected naming convention")]
     McdNameError(),
     #[error("No command provided")]
     NoCommand,
@@ -54,7 +54,7 @@ enum Commands {
         /// Directory where to restore archive
         #[arg(short, long)]
         output: PathBuf,
-        /// Whether to convert from mcd to srm
+        /// Whether to convert from mccardpro or to
         #[arg(short, long)]
         reverse: bool,
     },
@@ -95,6 +95,7 @@ lazy_static! {
         m.insert("ESPM", "(Japan)");
         m.insert("SLKA", "(Japan)");
         m.insert("HPS", "(Japan)");
+        m.insert("TLWL", ""); // custom code for FFT TlWotL patch
         m
     };
 }
@@ -139,7 +140,7 @@ fn get_info<S: AsRef<str>>(code: S, conn: &Connection) -> MemCardResult<Option<G
     Ok(info)
 }
 
-fn mcd_to_srm<P: AsRef<Path>>(mcd_path: P, conn: &Connection, des: P) -> MemCardResult<()> {
+fn mcd_name_converter<P: AsRef<Path>>(mcd_path: P, conn: &Connection, des: P) -> MemCardResult<()> {
     let parent_dir = mcd_path.as_ref().parent().unwrap();
     let code = parent_dir.file_name().unwrap().to_string_lossy();
     let info = get_info(code, conn)?.unwrap();
@@ -148,14 +149,20 @@ fn mcd_to_srm<P: AsRef<Path>>(mcd_path: P, conn: &Connection, des: P) -> MemCard
         .get(region_code)
         .ok_or(MemcardError::McdNameError())?;
     let mcd = mcd_path.as_ref().file_name().unwrap().to_string_lossy();
-    let num = match mcd.chars().nth_back(5).and_then(|c| c.to_digit(10)) {
-        Some(1) => "".to_string(),
-        Some(num) => format!(".{}", num - 1),
-        None => "".to_string(),
+    let num = mcd
+        .chars()
+        .nth_back(4)
+        .and_then(|c| c.to_digit(10))
+        .map(|n| format!("_{}", n));
+    if num.is_none() {
+        println!("{}", mcd);
+    }
+    println!("{:?}", info);
+    let title = match region.is_empty() {
+        true => format!(" {}", info.title.to_string()),
+        false => capitalize_first_letters(info.title.to_lowercase()),
     };
-
-    let title = capitalize_first_letters(info.title.to_lowercase());
-    let srm = title + " " + region + num.as_str() + ".srm";
+    let srm = title + region + num.unwrap().as_str() + ".mcd";
     let mut srm_path = des.as_ref().to_path_buf();
     srm_path.push(srm);
     fs::copy(&mcd_path, &srm_path)?;
@@ -169,7 +176,7 @@ fn mcd_to_srm<P: AsRef<Path>>(mcd_path: P, conn: &Connection, des: P) -> MemCard
 
 fn convert<P: AsRef<Path>>(src: P, conn: &Connection, des: P) -> MemCardResult<()> {
     for mcd_path in find_mcds(src)? {
-        mcd_to_srm(mcd_path.as_path(), conn, des.as_ref())?;
+        mcd_name_converter(mcd_path.as_path(), conn, des.as_ref())?;
     }
     Ok(())
 }
