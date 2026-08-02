@@ -89,7 +89,7 @@ impl SaveFile {
             savenum,
         };
 
-        let game = database::Game::from_filename(filename_info, conn)?;
+        let game = database::Game::from_filename(&filename_info, conn)?;
         Ok(match game {
             Some(game) => Some(SaveFile {
                 path,

@@ -26,6 +26,8 @@ static REGION_MAP: std::sync::LazyLock<HashMap<&'static str, &'static str>> =
         m.insert("HPS", "(Japan)");
         m
     });
+static REGION_MAP_REV: std::sync::LazyLock<HashMap<&'static str, &'static str>> =
+    std::sync::LazyLock::new(|| REGION_MAP.iter().map(|(k, v)| (*v, *k)).collect());
 
 #[derive(Clone, Debug)]
 pub struct GameInfo {
@@ -68,9 +70,9 @@ impl Game {
         };
         Ok(game)
     }
-    pub fn from_filename(srm: FileNameInfo, conn: &Connection) -> Result<Option<Game>> {
+    pub fn from_filename(srm: &FileNameInfo, conn: &Connection) -> Result<Option<Game>> {
         let patch = srm.patch.clone();
-        let info = GameInfo::from_filename(srm, conn)?;
+        let info = GameInfo::from_filename(&srm, conn)?;
         let game = match patch {
             Some(patch) => match info {
                 Some(info) => Some(Game::Ps1Mod(info, patch.clone())),
@@ -142,8 +144,25 @@ impl GameInfo {
         Ok(info)
     }
     /// loads game information from srm name
-    pub fn from_filename(srm: FileNameInfo, conn: &Connection) -> Result<Option<GameInfo>> {
-        todo!("implement from_srm");
+    pub fn from_filename(srm: &FileNameInfo, conn: &Connection) -> Result<Option<GameInfo>> {
+        let query = "SELECT code FROM ps1 WHERE title = ?;";
+        let codes = conn
+            .prepare(query)?
+            .into_iter()
+            .bind((1, &*srm.title))?
+            .map(|rrow| rrow.map(|row| row.read::<&str, _>("code").into()))
+            .collect::<Result<Vec<Arc<str>>, sqlite::Error>>()?;
+        let code_prefix = REGION_MAP_REV
+            .get(&*srm.region)
+            .ok_or(anyhow!("region {} not found in database", srm.region))?;
+        let code = codes
+            .iter()
+            .find(|code| code.split_once('-').map(|(prefix, _)| prefix) == Some(code_prefix));
+        let info = match code {
+            Some(code) => GameInfo::new(code, conn)?,
+            None => None,
+        };
+        Ok(info)
     }
 }
 
