@@ -1,11 +1,13 @@
 use anyhow::{Result, anyhow};
-use lazy_static::lazy_static;
 use sqlite::Connection;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
-lazy_static! {
-    static ref REGION_MAP: HashMap<&'static str, &'static str> = {
+use crate::FileNameInfo;
+
+static REGION_MAP: std::sync::LazyLock<HashMap<&'static str, &'static str>> =
+    std::sync::LazyLock::new(|| {
         let mut m = HashMap::new();
         m.insert("SLUS", "(USA)");
         m.insert("SCUS", "(USA)");
@@ -22,10 +24,8 @@ lazy_static! {
         m.insert("ESPM", "(Japan)");
         m.insert("SLKA", "(Japan)");
         m.insert("HPS", "(Japan)");
-        m.insert("TLWL", ""); // custom code for FFT TlWotL patch
         m
-    };
-}
+    });
 
 #[derive(Clone, Debug)]
 pub struct GameInfo {
@@ -34,9 +34,65 @@ pub struct GameInfo {
     pub lang: Box<str>,
 }
 
+#[derive(Clone, Debug)]
+pub enum Game {
+    Ps1(GameInfo),
+    Ps1Mod(GameInfo, Arc<str>), // the second field is the patch code
+}
+
+impl Game {
+    pub fn new(code: &str, conn: &Connection) -> Result<Option<Self>> {
+        let is_mod = conn
+            .prepare("SELECT * FROM ps1_mods WHERE code = ?;")?
+            .into_iter()
+            .bind((1, code))?
+            .next()
+            .transpose()?
+            .is_some();
+
+        let info = GameInfo::new(code, conn)?;
+        let patch_code = if is_mod {
+            info.as_ref()
+                .map(|info| info.get_patch_code(conn).ok().flatten())
+                .flatten()
+        } else {
+            None
+        };
+        let game = if is_mod {
+            match (info, patch_code) {
+                (Some(info), Some(patch_code)) => Some(Game::Ps1Mod(info, patch_code)),
+                _ => None,
+            }
+        } else {
+            info.map(Game::Ps1)
+        };
+        Ok(game)
+    }
+    pub fn from_filename(srm: FileNameInfo, conn: &Connection) -> Result<Option<Game>> {
+        let patch = srm.patch.clone();
+        let info = GameInfo::from_filename(srm, conn)?;
+        let game = match patch {
+            Some(patch) => match info {
+                Some(info) => Some(Game::Ps1Mod(info, patch.clone())),
+                None => None,
+            },
+            None => info.map(Game::Ps1),
+        };
+        Ok(game)
+    }
+    pub fn get_region(&self) -> Result<Option<&'static str>> {
+        self.get_info().get_region()
+    }
+    pub fn get_info(&self) -> &GameInfo {
+        match self {
+            Game::Ps1(info) | Game::Ps1Mod(info, _) => info,
+        }
+    }
+}
+
 impl GameInfo {
     /// Gets the region of the game: (USA), (Europe), (Japan); or nothing for patched/homebrew games.
-    pub fn get_region(&self) -> Result<Box<str>> {
+    pub fn get_region(&self) -> Result<Option<&'static str>> {
         let region_code = self
             .code
             .split_once('-')
@@ -45,39 +101,60 @@ impl GameInfo {
                 self.code
             ))?
             .0;
-        let region = REGION_MAP.get(region_code).ok_or(anyhow!("could not find region for code. If modded game then program needs to be updated with it's custom code"))?;
-        Ok((*region).into())
+        Ok(REGION_MAP.get(region_code).map(|v| &**v))
+    }
+    /// Get patch code for modded games, or None for unmodded games.
+    pub fn get_patch_code(&self, conn: &Connection) -> Result<Option<Arc<str>>> {
+        let patch_code = conn
+            .prepare("SELECT patch FROM ps1_mods WHERE code = ?;")?
+            .into_iter()
+            .bind((1, &*self.code))?
+            .map(|rrow| rrow.map(|row| row.read::<&str, _>("patch").into()))
+            .nth(0)
+            .transpose()?;
+        Ok(patch_code)
     }
     /// loads game information from code
-    pub fn new<S: AsRef<str>>(code: S, conn: &Connection) -> Result<Option<GameInfo>> {
-        let query = "SELECT * FROM ps1 WHERE code = ?";
+    pub fn new<S: AsRef<str> + std::fmt::Debug>(
+        code: S,
+        conn: &Connection,
+    ) -> Result<Option<GameInfo>> {
+        let query = "
+            SELECT *
+            FROM (SELECT * from ps1
+            UNION ALL
+            SELECT ps1_mods.code, ps1_mods.title, ps1.language FROM ps1_mods, ps1 ON ps1_mods.og_code = ps1.code)
+            WHERE code = ?;";
 
         let info = conn
-            .prepare(query)
-            .unwrap()
+            .prepare(query)?
             .into_iter()
-            .bind((1, code.as_ref()))
-            .unwrap()
-            .map(|row| row.unwrap())
-            .map(|row| GameInfo {
-                code: row.read::<&str, _>("code").into(),
-                title: row.read::<&str, _>("title").into(),
-                lang: row.read::<&str, _>("language").into(),
+            .bind((1, code.as_ref()))?
+            .map(|rrow| {
+                rrow.map(|row| GameInfo {
+                    code: row.read::<&str, _>("code").into(),
+                    title: row.read::<&str, _>("title").into(),
+                    lang: row.read::<&str, _>("language").into(),
+                })
             })
-            .nth(0);
+            .nth(0)
+            .transpose()?;
         Ok(info)
     }
-    /// loads game information from path
-    pub fn from_path<P: AsRef<Path>>(mcd_path: P, conn: &Connection) -> Result<Option<GameInfo>> {
-        let code = mcd_path
-            .as_ref()
-            .parent()
-            .ok_or(anyhow!("mcd file without parent dir"))?
-            .file_name()
-            .ok_or(anyhow!("is this the correct dir?"))?
-            .to_string_lossy();
-        let mcd = mcd_path.as_ref().file_name().unwrap().to_string_lossy();
-
-        GameInfo::new(&code, conn)
+    /// loads game information from srm name
+    pub fn from_filename(srm: FileNameInfo, conn: &Connection) -> Result<Option<GameInfo>> {
+        todo!("implement from_srm");
     }
+}
+
+/// Gets the region of the game: (USA), (Europe), (Japan); or nothing for patched/homebrew games.
+pub fn get_region<S: AsRef<str> + std::fmt::Debug>(code: S) -> Result<Option<&'static str>> {
+    let region_code = code
+        .as_ref()
+        .split_once('-')
+        .ok_or(anyhow!(
+            "{code:?} does not following code naming convention"
+        ))?
+        .0;
+    Ok(REGION_MAP.get(region_code).map(|v| &**v))
 }

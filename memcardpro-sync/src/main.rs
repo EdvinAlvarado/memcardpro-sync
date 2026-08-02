@@ -13,8 +13,7 @@ use clap::{Parser, Subcommand};
 use main_error::MainError;
 use sqlite::Connection;
 
-mod strings;
-use crate::strings::*;
+use memcardpro_sync::*;
 mod database;
 use crate::database::*;
 
@@ -96,39 +95,6 @@ fn find_mcds<P: AsRef<Path>>(src: P) -> Result<Vec<PathBuf>> {
     Ok(mcd_files)
 }
 
-/// Creates emulator-friendly save file name from memcardpro save file name.
-fn mcd_to_srm<P: AsRef<Path> + Clone>(mcd_path: P, conn: &Connection) -> Result<Box<str>> {
-    let info = GameInfo::from_path(mcd_path.as_ref(), conn)?
-        .ok_or(anyhow!("mcd path doesn't seem to match a memcardpro path"))?;
-    let region = info.get_region()?;
-
-    let savenum = mcd_path
-        .as_ref()
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .chars()
-        .nth_back(4)
-        .and_then(|c| c.to_digit(10))
-        .map(|n| format!("_{}", n))
-        .ok_or(anyhow!(
-            "mcd does not follow memcardpro naming convention: {:?}",
-            mcd_path.as_ref()
-        ))?;
-
-    let title = match region.is_empty() {
-        true => format!("{}", info.title.to_string()),
-        false => format!(
-            "{} {}",
-            capitalize_first_letters(info.title.to_lowercase()),
-            region
-        ),
-    };
-
-    let srm = title + savenum.as_str() + ".mcd";
-    Ok(srm.into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,5 +145,14 @@ mod tests {
             res.get("TLWL-94221-1.mcd").map(|s| s.as_ref()),
             Some("Final Fantasy Tactics (USA) (patched TLWotL v1.02)_1.mcd")
         );
+    }
+
+    #[test]
+    fn parse_srm_name_test() {
+        let srm_name = "Front Mission 3 (USA)_1.srm";
+        let parsed = parse_srm_name(srm_name).unwrap();
+        assert_eq!(parsed.title, "Front Mission 3");
+        assert_eq!(parsed.region, "(USA)");
+        assert_eq!(parsed.savenum, "1");
     }
 }
