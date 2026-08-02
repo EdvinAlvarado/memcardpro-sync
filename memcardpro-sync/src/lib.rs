@@ -22,6 +22,7 @@ pub fn capitalize_first_letters<S: AsRef<str>>(text: S) -> String {
         .join(" ")
 }
 
+#[allow(clippy::unwrap_used)]
 static SRM_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(
         r"^(?P<title>.+?) (?P<region>\([^)]+\))(?: (?P<patch>\([^)]+\)))?_(?P<savenum>\d+)\.srm$",
@@ -50,14 +51,15 @@ impl SaveFile {
             .file_name()
             .ok_or(anyhow!("mcd path has no parent dir name"))?
             .to_string_lossy();
-        let savenum =
-            path.file_name()
-                .ok_or(anyhow!("mcd path has no file name"))?
-                .to_string_lossy()
-                .chars()
-                .nth_back(4)
-                .and_then(|c| c.to_digit(10))
-                .ok_or(anyhow!("mcd path does not follow naming convention"))? as u32;
+        let savenum = path
+            .file_name()
+            .ok_or(anyhow!("mcd path has no file name"))?
+            .to_string_lossy()
+            .chars()
+            .nth_back(4)
+            .and_then(|c| c.to_digit(10))
+            .ok_or(anyhow!("mcd path does not follow naming convention"))?
+            .into();
         let game = database::Game::new(&code, conn)?;
 
         match game {
@@ -118,12 +120,11 @@ impl SaveFile {
         Ok(filename.into())
     }
     /// get memcardpro save file name from emulator-friendly save file name.
-    fn get_memcardpro_filename(&self) -> Result<Box<str>> {
+    fn get_memcardpro_filename(&self) -> Box<str> {
         let code = self.game.get_info().code.as_ref();
         let savenum = self.savenum;
 
-        let filename = format!("{code}-{savenum}.mcd");
-        Ok(filename.into())
+        format!("{code}-{savenum}.mcd").into_boxed_str()
     }
     /// write the save file to the destination directory with the emulator-friendly name.
     fn write_to_saves(&self, save_path: &Path) -> Result<()> {
@@ -136,7 +137,7 @@ impl SaveFile {
     }
     /// write the save file to the destination directory with the memcardpro name.
     fn write_to_memcardpro(&self, memcardpro_path: &Path, conn: &Connection) -> Result<()> {
-        let filename = self.get_memcardpro_filename()?;
+        let filename = self.get_memcardpro_filename();
         let mut des = memcardpro_path.to_path_buf();
 
         des.push(self.game.get_info().code.as_ref());
