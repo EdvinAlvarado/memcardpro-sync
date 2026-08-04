@@ -1,7 +1,6 @@
 use anyhow::{Result, anyhow};
 use sqlite::Connection;
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
 use crate::FileNameInfo;
