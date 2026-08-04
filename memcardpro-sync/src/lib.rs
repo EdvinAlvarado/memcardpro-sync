@@ -30,9 +30,9 @@ static SRM_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
 });
 
 pub struct SaveFile {
-    path: PathBuf,
-    savenum: u32,
-    game: database::Game,
+    pub path: PathBuf,
+    pub savenum: u32,
+    pub game: database::Game,
 }
 
 pub struct FileNameInfo {
@@ -43,34 +43,41 @@ pub struct FileNameInfo {
 }
 
 impl SaveFile {
-    fn from_memcardpro(path: PathBuf, conn: &Connection) -> Result<Option<Self>> {
+    /// Creates a `SaveFile` from a memcardpro save file path.
+    ///
+    /// # Errors
+    /// 1. If the path does not have a parent directory.
+    /// 2. If the parent directory does not have a name.
+    /// 3. If the path does not have a file name.
+    /// 4. If the file name does not follow the naming convention.
+    pub fn from_memcardpro(path: PathBuf, conn: &Connection) -> Result<Self> {
         let code = path
             .parent()
-            .ok_or(anyhow!("mcd path has no parent"))?
+            .ok_or_else(|| anyhow!("mcd path has no parent"))?
             .file_name()
-            .ok_or(anyhow!("mcd path has no parent dir name"))?
+            .ok_or_else(|| anyhow!("mcd path has no parent dir name"))?
             .to_string_lossy();
         let savenum = path
             .file_name()
-            .ok_or(anyhow!("mcd path has no file name"))?
+            .ok_or_else(|| anyhow!("mcd path has no file name"))?
             .to_string_lossy()
             .chars()
             .nth_back(4)
             .and_then(|c| c.to_digit(10))
-            .ok_or(anyhow!("mcd path does not follow naming convention"))?
-            .into();
-        let game = database::Game::new(&code, conn)?;
+            .ok_or_else(|| anyhow!("mcd path does not follow naming convention"))?;
+        let game = database::Game::new(&code, conn)?.ok_or_else(|| anyhow!("game code not found in database: {code}. If this code is for a PS1 mod, please submit issue ticket on github."))?;
 
-        match game {
-            Some(game) => Ok(Some(SaveFile {
-                path,
-                savenum,
-                game,
-            })),
-            None => Ok(None),
-        }
+        Ok(Self {
+            path,
+            savenum,
+            game,
+        })
     }
-    fn from_filename(path: PathBuf, conn: &Connection) -> Result<Option<Self>> {
+    /// Creates a `SaveFile` from an emulator-friendly save file path.
+    ///
+    /// # Errors
+    /// 1. If the file name does not follow the naming convention.
+    pub fn from_filename(path: PathBuf, conn: &Connection) -> Result<Option<Self>> {
         let filename = path.to_string_lossy();
 
         let caps = SRM_RE.captures(&filename).ok_or(anyhow!(
@@ -101,7 +108,10 @@ impl SaveFile {
         })
     }
     /// Creates emulator-friendly save file name from memcardpro save file name.
-    fn get_filename(&self) -> Result<Box<str>> {
+    ///
+    /// # Errors
+    /// 1. If the database does not have code for the `Game`.
+    pub fn get_filename(&self) -> Result<Box<str>> {
         let info = self.game.get_info();
         let region = info.get_region()?;
         let title = capitalize_first_letters(info.title.to_lowercase());
@@ -119,23 +129,40 @@ impl SaveFile {
         Ok(filename.into())
     }
     /// get memcardpro save file name from emulator-friendly save file name.
-    fn get_memcardpro_filename(&self) -> Box<str> {
+    pub fn get_memcardpro_filename(&self) -> Box<str> {
         let code = self.game.get_info().code.as_ref();
         let savenum = self.savenum;
 
         format!("{code}-{savenum}.mcd").into_boxed_str()
     }
     /// write the save file to the destination directory with the emulator-friendly name.
-    fn write_to_saves(&self, save_path: &Path) -> Result<()> {
-        let filename = self.get_filename()?;
-        let mut des = save_path.to_path_buf();
-        des.push(filename.as_ref());
-        std::fs::copy(&self.path, &des)?;
-        println!("Copied: {}\t->\t{}", self.path.display(), des.display());
+    ///
+    /// # Errors
+    /// 1. Cannot find region for `Game`.
+    /// 2. If the destination directory does not exist and cannot be created.
+    /// 3. If the save file cannot be copied to the destination directory.
+    pub fn write_to_saves(&self, save_path: &Path) -> Result<()> {
+        let filename = self
+            .get_filename()
+            .map_err(|e| anyhow!("failed to get filename: {e}"))?;
+
+        let mut new_save_path = save_path.to_path_buf();
+        new_save_path.push(filename.as_ref());
+        std::fs::create_dir_all(save_path)?;
+        std::fs::copy(&self.path, &new_save_path)?;
+        println!(
+            "Copied: {}\t->\t{}",
+            self.path.display(),
+            new_save_path.display()
+        );
         Ok(())
     }
     /// write the save file to the destination directory with the memcardpro name.
-    fn write_to_memcardpro(&self, memcardpro_path: &Path, conn: &Connection) -> Result<()> {
+    ///
+    /// # Errors
+    /// 1. If the destination directory does not exist and cannot be created.
+    /// 2. If the save file cannot be copied to the destination directory.
+    pub fn write_to_memcardpro(&self, memcardpro_path: &Path) -> Result<()> {
         let filename = self.get_memcardpro_filename();
         let mut des = memcardpro_path.to_path_buf();
 
@@ -190,7 +217,7 @@ mod tests {
         let path = PathBuf::from("~/Documents/saves/psx/Ape Escape (USA)_1.mcd");
         let conn = sqlite::open("../../tests/ps1_games.sqlite3").unwrap();
         let savefile = SaveFile::from_filename(path, &conn).unwrap().unwrap();
-        let filename = savefile.get_memcardpro_filename().unwrap();
+        let filename = savefile.get_memcardpro_filename();
         assert_eq!(filename, "SCUS-94423-1.mcd".into());
     }
     #[test]
@@ -201,7 +228,7 @@ mod tests {
         let conn = sqlite::open("../../tests/ps1_games.sqlite3").unwrap();
         let savefile = SaveFile::from_filename(path, &conn).unwrap().unwrap();
         assert_eq!(
-            savefile.get_memcardpro_filename().unwrap(),
+            savefile.get_memcardpro_filename(),
             "TLWL-94221-1.mcd".into()
         );
     }
