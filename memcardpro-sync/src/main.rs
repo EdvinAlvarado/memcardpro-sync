@@ -62,21 +62,18 @@ fn main() -> Result<(), MainError> {
 }
 
 fn convert<P: AsRef<Path>>(src: P, conn: &Connection, des: P) -> Result<()> {
-    for mcd_path in find_mcds(src)? {
-        let srm = mcd_to_srm(mcd_path.as_path(), conn)?;
-        let mut srm_path = des.as_ref().to_path_buf();
-        srm_path.push(srm.as_ref());
-
-        fs::copy(&mcd_path, &srm_path)?;
-        println!("Copied: {}\t->\t{}", mcd_path.display(), srm_path.display());
+    for savefile in find_mcds(src, conn)? {
+        savefile.write_to_saves(des.as_ref())?;
     }
     Ok(())
 }
 
 /// Finds all mcd files in src path that are named by gameid.
-fn find_mcds<P: AsRef<Path>>(src: P) -> Result<Vec<PathBuf>> {
-    let mut ps1_dir = src.as_ref().to_path_buf();
-    ps1_dir.push("PS1");
+/// it ignores any directories that contain `MemoryCard` in their name, as those are likely not
+/// relevant to the search. !todo add supprt for processing `MemoryCard` directories, as they may
+/// contain relevant mcd files.
+fn find_mcds<P: AsRef<Path>>(src: P, conn: &Connection) -> Result<Vec<SaveFile>> {
+    let ps1_dir = src.as_ref().to_path_buf();
 
     let mut mcd_files = Vec::new();
     for entry in fs::read_dir(ps1_dir)? {
@@ -85,13 +82,12 @@ fn find_mcds<P: AsRef<Path>>(src: P) -> Result<Vec<PathBuf>> {
             for file in fs::read_dir(entry.path())? {
                 let file = file?;
                 if file.path().is_file() {
-                    mcd_files.push(file.path());
+                    let savefile = SaveFile::from_memcardpro(file.path(), conn)?;
+                    mcd_files.push(savefile);
                 }
             }
         }
     }
-    mcd_files.sort();
-
     Ok(mcd_files)
 }
 
