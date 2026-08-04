@@ -93,6 +93,37 @@ impl Game {
 }
 
 impl GameInfo {
+    /// loads game information from code
+    ///
+    /// # Errors
+    /// 1. If the game code does not exist in the database.
+    /// 2. If query fails.
+    pub fn new<S: AsRef<str> + std::fmt::Debug>(
+        code: S,
+        conn: &Connection,
+    ) -> Result<Option<Self>> {
+        let query = "
+            SELECT *
+            FROM (SELECT * from ps1
+            UNION ALL
+            SELECT ps1_mods.code, ps1_mods.title, ps1.language FROM ps1_mods, ps1 ON ps1_mods.og_code = ps1.code)
+            WHERE code = ?;";
+
+        let info = conn
+            .prepare(query)?
+            .into_iter()
+            .bind((1, code.as_ref()))?
+            .map(|rrow| {
+                rrow.map(|row| GameInfo {
+                    code: row.read::<&str, _>("code").into(),
+                    title: row.read::<&str, _>("title").into(),
+                    lang: row.read::<&str, _>("language").into(),
+                })
+            })
+            .nth(0)
+            .transpose()?;
+        Ok(info)
+    }
     /// Gets the region of the game: (USA), (Europe), (Japan); or nothing for patched/homebrew games.
     pub fn get_region(&self) -> Result<Option<&'static str>> {
         let region_code = self
@@ -115,33 +146,6 @@ impl GameInfo {
             .nth(0)
             .transpose()?;
         Ok(patch_code)
-    }
-    /// loads game information from code
-    pub fn new<S: AsRef<str> + std::fmt::Debug>(
-        code: S,
-        conn: &Connection,
-    ) -> Result<Option<GameInfo>> {
-        let query = "
-            SELECT *
-            FROM (SELECT * from ps1
-            UNION ALL
-            SELECT ps1_mods.code, ps1_mods.title, ps1.language FROM ps1_mods, ps1 ON ps1_mods.og_code = ps1.code)
-            WHERE code = ?;";
-
-        let info = conn
-            .prepare(query)?
-            .into_iter()
-            .bind((1, code.as_ref()))?
-            .map(|rrow| {
-                rrow.map(|row| GameInfo {
-                    code: row.read::<&str, _>("code").into(),
-                    title: row.read::<&str, _>("title").into(),
-                    lang: row.read::<&str, _>("language").into(),
-                })
-            })
-            .nth(0)
-            .transpose()?;
-        Ok(info)
     }
     /// loads game information from srm name
     pub fn from_filename(srm: &FileNameInfo, conn: &Connection) -> Result<Option<GameInfo>> {
