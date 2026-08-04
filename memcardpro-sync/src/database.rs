@@ -43,6 +43,12 @@ pub enum Game {
 }
 
 impl Game {
+    /// Creates a `Game` from a game code.
+    /// If the game is a mod, it will return `Game::Ps1Mod`
+    ///
+    /// # Errors
+    /// 1. If the game code does not exist in the database.
+    /// 2. If query fails.
     pub fn new(code: &str, conn: &Connection) -> Result<Option<Self>> {
         let is_mod = conn
             .prepare("SELECT * FROM ps1_mods WHERE code = ?;")?
@@ -55,18 +61,14 @@ impl Game {
         let info = GameInfo::new(code, conn)?;
         let patch_code = if is_mod {
             info.as_ref()
-                .map(|info| info.get_patch_code(conn).ok().flatten())
-                .flatten()
+                .and_then(|info| info.get_patch_code(conn).ok().flatten())
         } else {
             None
         };
-        let game = if is_mod {
-            match (info, patch_code) {
-                (Some(info), Some(patch_code)) => Some(Game::Ps1Mod(info, patch_code)),
+        let game = match (info, patch_code) {
+            (Some(info), Some(patch_code)) => Some(Self::Ps1Mod(info, patch_code)),
+            (Some(info), None) => Some(Self::Ps1(info)),
                 _ => None,
-            }
-        } else {
-            info.map(Game::Ps1)
         };
         Ok(game)
     }
