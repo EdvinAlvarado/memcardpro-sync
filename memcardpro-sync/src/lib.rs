@@ -1,5 +1,4 @@
 mod database;
-use crate::database::*;
 use anyhow::{Result, anyhow};
 use regex::Regex;
 use sqlite::Connection;
