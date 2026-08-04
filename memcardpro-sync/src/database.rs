@@ -67,7 +67,7 @@ impl Game {
         let game = match (info, patch_code) {
             (Some(info), Some(patch_code)) => Some(Self::Ps1Mod(info, patch_code)),
             (Some(info), None) => Some(Self::Ps1(info)),
-                _ => None,
+            _ => None,
         };
         Ok(game)
     }
