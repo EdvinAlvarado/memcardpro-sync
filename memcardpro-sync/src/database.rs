@@ -25,72 +25,44 @@ static REGION_MAP: std::sync::LazyLock<HashMap<&'static str, &'static str>> =
         m.insert("HPS", "(Japan)");
         m
     });
-static REGION_MAP_REV: std::sync::LazyLock<HashMap<&'static str, &'static str>> =
-    std::sync::LazyLock::new(|| REGION_MAP.iter().map(|(k, v)| (*v, *k)).collect());
+static REGION_MAP_REV: std::sync::LazyLock<HashMap<&'static str, Vec<&'static str>>> =
+    std::sync::LazyLock::new(|| {
+        let mut m: HashMap<&str, Vec<&str>> = HashMap::new();
+        for (k, v) in REGION_MAP.iter() {
+            m.entry(*v).or_default().push(*k);
+        }
+        m
+    });
+
+static QUERY: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    "SELECT code, title, language, NULL AS patch
+    FROM ps1
+
+    UNION ALL
+
+    SELECT m.code, p.title, m.language, m.patch
+    FROM ps1_mods m
+    LEFT JOIN ps1 p ON m.og_code = p.code;"
+});
+static QUERY_FROM_FILENAME: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    "SELECT code, title, language, NULL AS patch
+    FROM ps1
+    WHERE title = ?
+
+    UNION ALL
+
+    SELECT m.code, p.title, m.language, m.patch
+    FROM ps1_mods m
+    LEFT JOIN ps1 p ON m.og_code = p.code
+    WHERE p.title = ?;"
+});
 
 #[derive(Clone, Debug)]
 pub struct GameInfo {
     pub code: Box<str>,
-    pub title: Box<str>,
+    title: Box<str>,
     pub lang: Box<str>,
-}
-
-#[derive(Clone, Debug)]
-pub enum Game {
-    Ps1(GameInfo),
-    Ps1Mod(GameInfo, Arc<str>), // the second field is the patch code
-}
-
-impl Game {
-    /// Creates a `Game` from a game code.
-    /// If the game is a mod, it will return `Game::Ps1Mod`
-    ///
-    /// # Errors
-    /// 1. If the game code does not exist in the database.
-    /// 2. If query fails.
-    pub fn new(code: &str, conn: &Connection) -> Result<Option<Self>> {
-        let is_mod = conn
-            .prepare("SELECT * FROM ps1_mods WHERE code = ?;")?
-            .into_iter()
-            .bind((1, code))?
-            .next()
-            .transpose()?
-            .is_some();
-
-        let info = GameInfo::new(code, conn)?;
-        let patch_code = if is_mod {
-            info.as_ref()
-                .and_then(|info| info.get_patch_code(conn).ok().flatten())
-        } else {
-            None
-        };
-        let game = match (info, patch_code) {
-            (Some(info), Some(patch_code)) => Some(Self::Ps1Mod(info, patch_code)),
-            (Some(info), None) => Some(Self::Ps1(info)),
-            _ => None,
-        };
-        Ok(game)
-    }
-    pub fn from_filename(srm: &FileNameInfo, conn: &Connection) -> Result<Option<Game>> {
-        let patch = srm.patch.clone();
-        let info = GameInfo::from_filename(&srm, conn)?;
-        let game = match patch {
-            Some(patch) => match info {
-                Some(info) => Some(Game::Ps1Mod(info, patch.clone())),
-                None => None,
-            },
-            None => info.map(Game::Ps1),
-        };
-        Ok(game)
-    }
-    pub fn get_region(&self) -> Result<Option<&'static str>> {
-        self.get_info().get_region()
-    }
-    pub fn get_info(&self) -> &GameInfo {
-        match self {
-            Game::Ps1(info) | Game::Ps1Mod(info, _) => info,
-        }
-    }
+    patch: Option<Arc<str>>,
 }
 
 impl GameInfo {
@@ -103,15 +75,8 @@ impl GameInfo {
         code: S,
         conn: &Connection,
     ) -> Result<Option<Self>> {
-        let query = "
-            SELECT *
-            FROM (SELECT * from ps1
-            UNION ALL
-            SELECT ps1_mods.code, ps1_mods.title, ps1.language FROM ps1_mods, ps1 ON ps1_mods.og_code = ps1.code)
-            WHERE code = ?;";
-
         let info = conn
-            .prepare(query)?
+            .prepare(*QUERY)?
             .into_iter()
             .bind((1, code.as_ref()))?
             .map(|rrow| {
@@ -119,55 +84,69 @@ impl GameInfo {
                     code: row.read::<&str, _>("code").into(),
                     title: row.read::<&str, _>("title").into(),
                     lang: row.read::<&str, _>("language").into(),
+                    patch: row.read::<Option<&str>, _>("patch").map(|s| s.into()),
                 })
             })
             .nth(0)
             .transpose()?;
         Ok(info)
     }
-    /// Gets the region of the game: (USA), (Europe), (Japan); or nothing for patched/homebrew games.
-    pub fn get_region(&self) -> Result<Option<&'static str>> {
-        let region_code = self
-            .code
-            .split_once('-')
-            .ok_or(anyhow!(
-                "{} does not following code naming convention",
-                self.code
-            ))?
-            .0;
-        Ok(REGION_MAP.get(region_code).map(|v| &**v))
+    /// Contruct title
+    pub fn get_title(&self) -> Box<str> {
+        let region = self.get_region().unwrap_or("");
+        let title = crate::capitalize_first_letters(self.title.to_lowercase());
+
+        let title = if let Some(patch) = &self.patch {
+            format!("{} {} ({})", self.title, region, patch.to_uppercase())
+        } else {
+            format!("{} {}", self.title, region)
+        };
+        title.into()
     }
-    /// Get patch code for modded games, or None for unmodded games.
-    pub fn get_patch_code(&self, conn: &Connection) -> Result<Option<Arc<str>>> {
-        let patch_code = conn
-            .prepare("SELECT patch FROM ps1_mods WHERE code = ?;")?
-            .into_iter()
-            .bind((1, &*self.code))?
-            .map(|rrow| rrow.map(|row| row.read::<&str, _>("patch").into()))
-            .nth(0)
-            .transpose()?;
-        Ok(patch_code)
+    /// Gets the region of the game: (USA), (Europe), (Japan); or nothing for patched/homebrew games.
+    pub fn get_region(&self) -> Option<&'static str> {
+        let region_code = self.code.split_once('-').map(|(prefix, _)| prefix)?;
+        REGION_MAP.get(region_code).map(|v| &**v)
     }
     /// loads game information from srm name
     pub fn from_filename(srm: &FileNameInfo, conn: &Connection) -> Result<Option<GameInfo>> {
-        let query = "SELECT code FROM ps1 WHERE title = ?;";
-        let codes = conn
-            .prepare(query)?
+        eprintln!("TEMP TEST looking up game info for srm: {:?}", srm);
+        let title = &*srm.title.to_uppercase();
+        println!("TEMP TEST looking up game info for title: {title}");
+        let games = conn
+            .prepare(*QUERY_FROM_FILENAME)?
             .into_iter()
-            .bind((1, &*srm.title))?
-            .map(|rrow| rrow.map(|row| row.read::<&str, _>("code").into()))
-            .collect::<Result<Vec<Arc<str>>, sqlite::Error>>()?;
-        let code_prefix = REGION_MAP_REV
+            .bind((1, title))?
+            .map(|rrow| {
+                rrow.map(|row| GameInfo {
+                    code: row.read::<&str, _>("code").into(),
+                    title: row.read::<&str, _>("title").into(),
+                    lang: row.read::<&str, _>("language").into(),
+                    patch: row.read::<Option<&str>, _>("patch").map(|s| s.into()),
+                })
+            })
+            .collect::<Result<Vec<GameInfo>, sqlite::Error>>()?;
+        println!("TEMP TEST found codes: {:?}", games);
+
+        let code_prefixes = REGION_MAP_REV
             .get(&*srm.region)
             .ok_or(anyhow!("region {} not found in database", srm.region))?;
-        let code = codes
-            .iter()
-            .find(|code| code.split_once('-').map(|(prefix, _)| prefix) == Some(code_prefix));
-        let info = match code {
-            Some(code) => GameInfo::new(code, conn)?,
-            None => None,
-        };
-        Ok(info)
+        println!(
+            "TEMP TEST looking for code with prefix: {:?}",
+            code_prefixes
+        );
+
+        let game = games.into_iter().find(|game| {
+            let code_prefix = game.code.split_once('-').map(|(prefix, _)| prefix);
+            match code_prefix {
+                Some(prefix) => code_prefixes.contains(&prefix),
+                None => false,
+            }
+        });
+
+        println!("TEMP TEST found code: {:?}", game);
+
+        Ok(game)
     }
 }
 

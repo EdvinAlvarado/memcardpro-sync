@@ -23,8 +23,7 @@ pub fn capitalize_first_letters<S: AsRef<str>>(text: S) -> String {
 
 #[allow(clippy::unwrap_used)]
 static SRM_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(
-        r"^(?P<title>.+?) (?P<region>\([^)]+\))(?: (?P<patch>\([^)]+\)))?_(?P<savenum>\d+)\.srm$",
+    Regex::new(r"^(?P<title>.+?)\s+(?P<region>\([^)]+\))(?:\s+\((?P<patch>[^)]+)\))?_(?P<savenum>\d+)\.mcd$"
     )
     .unwrap()
 });
@@ -32,9 +31,10 @@ static SRM_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
 pub struct SaveFile {
     pub path: PathBuf,
     pub savenum: u32,
-    pub game: database::Game,
+    pub game: database::GameInfo,
 }
 
+#[derive(Debug)]
 pub struct FileNameInfo {
     pub title: Box<str>,
     pub region: Box<str>,
@@ -65,7 +65,7 @@ impl SaveFile {
             .nth_back(4)
             .and_then(|c| c.to_digit(10))
             .ok_or_else(|| anyhow!("mcd path does not follow naming convention"))?;
-        let game = database::Game::new(&code, conn)?.ok_or_else(|| anyhow!("game code not found in database: {code}. If this code is for a PS1 mod, please submit issue ticket on github."))?;
+        let game = database::GameInfo::new(&code, conn)?.ok_or_else(|| anyhow!("game code not found in database: {code}. If this code is for a PS1 mod, please submit issue ticket on github."))?;
 
         Ok(Self {
             path,
@@ -78,7 +78,10 @@ impl SaveFile {
     /// # Errors
     /// 1. If the file name does not follow the naming convention.
     pub fn from_filename(path: PathBuf, conn: &Connection) -> Result<Option<Self>> {
-        let filename = path.to_string_lossy();
+        let filename = path
+            .file_name()
+            .ok_or(anyhow!("path has no file name"))?
+            .to_string_lossy();
 
         let caps = SRM_RE.captures(&filename).ok_or(anyhow!(
             "srm name does not follow naming convention: {}",
@@ -97,7 +100,7 @@ impl SaveFile {
             savenum,
         };
 
-        let game = database::Game::from_filename(&filename_info, conn)?;
+        let game = database::GameInfo::from_filename(&filename_info, conn)?;
         Ok(match game {
             Some(game) => Some(SaveFile {
                 path,
@@ -108,29 +111,15 @@ impl SaveFile {
         })
     }
     /// Creates emulator-friendly save file name from memcardpro save file name.
-    ///
-    /// # Errors
-    /// 1. If the database does not have code for the `Game`.
-    pub fn get_filename(&self) -> Result<Box<str>> {
-        let info = self.game.get_info();
-        let region = info.get_region()?;
-        let title = capitalize_first_letters(info.title.to_lowercase());
-        let patch = match &self.game {
-            database::Game::Ps1(_) => None,
-            database::Game::Ps1Mod(_, patch) => Some(patch.clone()),
-        }
-        .unwrap_or_default();
+    pub fn get_filename(&self) -> Box<str> {
+        let title = self.game.get_title();
 
-        let filename = format!(
-            "{title} {region}{patch}_{savenum}.mcd",
-            region = region.unwrap_or(""),
-            savenum = self.savenum
-        );
-        Ok(filename.into())
+        let filename = format!("{title}_{savenum}.mcd", savenum = self.savenum);
+        filename.into()
     }
     /// get memcardpro save file name from emulator-friendly save file name.
     pub fn get_memcardpro_filename(&self) -> Box<str> {
-        let code = self.game.get_info().code.as_ref();
+        let code = self.game.code.as_ref();
         let savenum = self.savenum;
 
         format!("{code}-{savenum}.mcd").into_boxed_str()
@@ -142,9 +131,7 @@ impl SaveFile {
     /// 2. If the destination directory does not exist and cannot be created.
     /// 3. If the save file cannot be copied to the destination directory.
     pub fn write_to_saves(&self, save_path: &Path) -> Result<()> {
-        let filename = self
-            .get_filename()
-            .map_err(|e| anyhow!("failed to get filename: {e}"))?;
+        let filename = self.get_filename();
 
         let mut new_save_path = save_path.to_path_buf();
         new_save_path.push(filename.as_ref());
@@ -166,7 +153,7 @@ impl SaveFile {
         let filename = self.get_memcardpro_filename();
         let mut des = memcardpro_path.to_path_buf();
 
-        des.push(self.game.get_info().code.as_ref());
+        des.push(self.game.code.as_ref());
         std::fs::create_dir_all(&des)?;
 
         des.push(filename.as_ref());
@@ -191,7 +178,7 @@ mod tests {
         let path = PathBuf::from("tests/memcardpro/SCUS-94423/SCUS-94423-1.mcd");
         let conn = sqlite::open("data/ps1_games.sqlite3").unwrap();
         let savefile = SaveFile::from_memcardpro(path, &conn).unwrap();
-        assert_eq!(savefile.game.get_info().code, "SCUS-94423".into());
+        assert_eq!(savefile.game.code, "SCUS-94423".into());
         assert_eq!(savefile.savenum, 1);
     }
     #[test]
@@ -199,7 +186,8 @@ mod tests {
         let path = PathBuf::from("tests/memcardpro/SCUS-94423/SCUS-94423-1.mcd");
         let conn = sqlite::open("data/ps1_games.sqlite3").unwrap();
         let savefile = SaveFile::from_memcardpro(path, &conn).unwrap();
-        let filename = savefile.get_filename().unwrap();
+        let filename = savefile.get_filename();
+        println!("filename: {}", filename);
         assert_eq!(filename, "Ape Escape (USA)_1.mcd".into());
     }
     #[test]
@@ -207,17 +195,19 @@ mod tests {
         let path = PathBuf::from("tests/memcardpro/TLWL-94221/TLWL-94221-1.mcd");
         let conn = sqlite::open("data/ps1_games.sqlite3").unwrap();
         let savefile = SaveFile::from_memcardpro(path, &conn).unwrap();
+        println!("filename: {}", savefile.get_filename());
         assert_eq!(
-            savefile.get_filename().unwrap(),
+            savefile.get_filename(),
             "Final Fantasy Tactics (USA) (patched TLWotL v1.02)_1.mcd".into()
         );
     }
     #[test]
     fn savefile_translate_test() {
         let path = PathBuf::from("~/Documents/saves/psx/Ape Escape (USA)_1.mcd");
-        let conn = sqlite::open("../../tests/ps1_games.sqlite3").unwrap();
+        let conn = sqlite::open("data/ps1_games.sqlite3").unwrap();
         let savefile = SaveFile::from_filename(path, &conn).unwrap().unwrap();
         let filename = savefile.get_memcardpro_filename();
+        println!("filename: {}", filename);
         assert_eq!(filename, "SCUS-94423-1.mcd".into());
     }
     #[test]
@@ -225,7 +215,7 @@ mod tests {
         let path = PathBuf::from(
             "~/Documents/saves/psx/Final Fantasy Tactics (USA) (patched TLWotL v1.02)_1.mcd",
         );
-        let conn = sqlite::open("../../tests/ps1_games.sqlite3").unwrap();
+        let conn = sqlite::open("data/ps1_games.sqlite3").unwrap();
         let savefile = SaveFile::from_filename(path, &conn).unwrap().unwrap();
         assert_eq!(
             savefile.get_memcardpro_filename(),
