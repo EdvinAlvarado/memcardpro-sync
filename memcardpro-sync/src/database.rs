@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use sqlite::Connection;
 use std::collections::HashMap;
 use std::sync::Arc;
