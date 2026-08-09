@@ -188,24 +188,24 @@ mod tests {
 
     #[test]
     fn mcdfile_creation_test() {
-        let path = PathBuf::from("../../tests/memcardpro/SCUS-94423/SCUS-94423-1.mcd");
-        let conn = sqlite::open("../../tests/ps1_games.sqlite3").unwrap();
+        let path = PathBuf::from("tests/memcardpro/SCUS-94423/SCUS-94423-1.mcd");
+        let conn = sqlite::open("data/ps1_games.sqlite3").unwrap();
         let savefile = SaveFile::from_memcardpro(path, &conn).unwrap();
         assert_eq!(savefile.game.get_info().code, "SCUS-94423".into());
         assert_eq!(savefile.savenum, 1);
     }
     #[test]
     fn mcdfile_translate_test() {
-        let path = PathBuf::from("../../tests/memcardpro/SCUS-94423/SCUS-94423-1.mcd");
-        let conn = sqlite::open("../../tests/ps1_games.sqlite3").unwrap();
+        let path = PathBuf::from("tests/memcardpro/SCUS-94423/SCUS-94423-1.mcd");
+        let conn = sqlite::open("data/ps1_games.sqlite3").unwrap();
         let savefile = SaveFile::from_memcardpro(path, &conn).unwrap();
         let filename = savefile.get_filename().unwrap();
         assert_eq!(filename, "Ape Escape (USA)_1.mcd".into());
     }
     #[test]
     fn mcdfile_translate_patched_test() {
-        let path = PathBuf::from("../../tests/memcardpro/TLWL-94221/TLWL-94221-1.mcd");
-        let conn = sqlite::open("../../tests/ps1_games.sqlite3").unwrap();
+        let path = PathBuf::from("tests/memcardpro/TLWL-94221/TLWL-94221-1.mcd");
+        let conn = sqlite::open("data/ps1_games.sqlite3").unwrap();
         let savefile = SaveFile::from_memcardpro(path, &conn).unwrap();
         assert_eq!(
             savefile.get_filename().unwrap(),
