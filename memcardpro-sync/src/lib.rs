@@ -1,5 +1,5 @@
 mod database;
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use regex::Regex;
 use sqlite::Connection;
 use std::path::{Path, PathBuf};
