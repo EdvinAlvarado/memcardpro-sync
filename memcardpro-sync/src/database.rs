@@ -35,23 +35,25 @@ static REGION_MAP_REV: std::sync::LazyLock<HashMap<&'static str, Vec<&'static st
     });
 
 static QUERY: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
-    "SELECT code, title, language, NULL AS patch
+    "SELECT code, title, language, NULL AS patch, code AS region_code
     FROM ps1
+    WHERE code = ?
 
     UNION ALL
 
-    SELECT m.code, p.title, m.language, m.patch
+    SELECT m.code, p.title, m.language, m.patch, m.og_code AS region_code
     FROM ps1_mods m
-    LEFT JOIN ps1 p ON m.og_code = p.code;"
+    LEFT JOIN ps1 p ON m.og_code = p.code
+    WHERE m.code = ?;"
 });
 static QUERY_FROM_FILENAME: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
-    "SELECT code, title, language, NULL AS patch
+    "SELECT code, title, language, NULL AS patch, code AS region_code
     FROM ps1
     WHERE title = ?
 
     UNION ALL
 
-    SELECT m.code, p.title, m.language, m.patch
+    SELECT m.code, p.title, m.language, m.patch, m.og_code AS region_code
     FROM ps1_mods m
     LEFT JOIN ps1 p ON m.og_code = p.code
     WHERE p.title = ?;"
@@ -63,6 +65,7 @@ pub struct GameInfo {
     title: Box<str>,
     pub lang: Box<str>,
     patch: Option<Arc<str>>,
+    region_code: Box<str>,
 }
 
 impl GameInfo {
@@ -79,12 +82,14 @@ impl GameInfo {
             .prepare(*QUERY)?
             .into_iter()
             .bind((1, code.as_ref()))?
+            .bind((2, code.as_ref()))?
             .map(|rrow| {
                 rrow.map(|row| GameInfo {
                     code: row.read::<&str, _>("code").into(),
                     title: row.read::<&str, _>("title").into(),
                     lang: row.read::<&str, _>("language").into(),
                     patch: row.read::<Option<&str>, _>("patch").map(|s| s.into()),
+                    region_code: row.read::<&str, _>("region_code").into(),
                 })
             })
             .nth(0)
@@ -95,46 +100,57 @@ impl GameInfo {
     pub fn get_title(&self) -> Box<str> {
         let region = self.get_region().unwrap_or("");
         let title = crate::capitalize_first_letters(self.title.to_lowercase());
-
         let title = if let Some(patch) = &self.patch {
-            format!("{} {} ({})", self.title, region, patch.to_uppercase())
+            if region.is_empty() {
+                format!("{} ({})", title, patch)
+            } else {
+                format!("{} {} ({})", title, region, patch)
+            }
         } else {
-            format!("{} {}", self.title, region)
+            format!("{} {}", title, region)
         };
         title.into()
     }
     /// Gets the region of the game: (USA), (Europe), (Japan); or nothing for patched/homebrew games.
     pub fn get_region(&self) -> Option<&'static str> {
-        let region_code = self.code.split_once('-').map(|(prefix, _)| prefix)?;
+        let region_code = self.region_code.split_once('-').map(|(prefix, _)| prefix)?;
         REGION_MAP.get(region_code).map(|v| &**v)
     }
     /// loads game information from srm name
     pub fn from_filename(srm: &FileNameInfo, conn: &Connection) -> Result<Option<GameInfo>> {
-        eprintln!("TEMP TEST looking up game info for srm: {:?}", srm);
         let title = &*srm.title.to_uppercase();
-        println!("TEMP TEST looking up game info for title: {title}");
         let games = conn
             .prepare(*QUERY_FROM_FILENAME)?
             .into_iter()
             .bind((1, title))?
+            .bind((2, title))?
             .map(|rrow| {
                 rrow.map(|row| GameInfo {
                     code: row.read::<&str, _>("code").into(),
                     title: row.read::<&str, _>("title").into(),
                     lang: row.read::<&str, _>("language").into(),
                     patch: row.read::<Option<&str>, _>("patch").map(|s| s.into()),
+                    region_code: row.read::<&str, _>("region_code").into(),
                 })
             })
             .collect::<Result<Vec<GameInfo>, sqlite::Error>>()?;
-        println!("TEMP TEST found codes: {:?}", games);
 
+        // If the srm has a patch, try to find a game with the same patch first.
+        if let Some(patch) = srm.patch.as_deref() {
+            let patched = games.iter().find(|game| {
+                game.patch
+                    .as_deref()
+                    .is_some_and(|p| p.eq_ignore_ascii_case(patch))
+            });
+            if let Some(game) = patched {
+                return Ok(Some(game.clone()));
+            }
+        }
+
+        // If no game with the same patch was found, try to find a game with the same region.
         let code_prefixes = REGION_MAP_REV
             .get(&*srm.region)
             .ok_or(anyhow!("region {} not found in database", srm.region))?;
-        println!(
-            "TEMP TEST looking for code with prefix: {:?}",
-            code_prefixes
-        );
 
         let game = games.into_iter().find(|game| {
             let code_prefix = game.code.split_once('-').map(|(prefix, _)| prefix);
@@ -143,8 +159,6 @@ impl GameInfo {
                 None => false,
             }
         });
-
-        println!("TEMP TEST found code: {:?}", game);
 
         Ok(game)
     }
