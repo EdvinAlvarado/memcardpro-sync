@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use sqlite::Connection;
 use std::collections::HashMap;
+use std::fmt::format;
 use std::sync::Arc;
 
 use crate::FileNameInfo;
@@ -100,14 +101,11 @@ impl GameInfo {
     pub fn get_title(&self) -> Box<str> {
         let region = self.get_region().unwrap_or("");
         let title = crate::capitalize_first_letters(self.title.to_lowercase());
-        let title = if let Some(patch) = &self.patch {
-            if region.is_empty() {
-                format!("{} ({})", title, patch)
-            } else {
-                format!("{} {} ({})", title, region, patch)
-            }
-        } else {
-            format!("{} {}", title, region)
+        let title = match (self.patch.as_deref(), region) {
+            (Some(patch), "") => format!("{} ({})", title, patch),
+            (Some(patch), region) => format!("{} {} ({})", title, region, patch),
+            (None, "") => title,
+            (None, region) => format!("{} {}", title, region),
         };
         title.into()
     }
