@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Result};
 use sqlite::Connection;
 use std::collections::HashMap;
-use std::fmt::format;
 use std::sync::Arc;
 
 use crate::FileNameInfo;
@@ -89,7 +88,7 @@ impl GameInfo {
                     code: row.read::<&str, _>("code").into(),
                     title: row.read::<&str, _>("title").into(),
                     lang: row.read::<&str, _>("language").into(),
-                    patch: row.read::<Option<&str>, _>("patch").map(|s| s.into()),
+                    patch: row.read::<Option<&str>, _>("patch").map(Into::into),
                     region_code: row.read::<&str, _>("region_code").into(),
                 })
             })
@@ -102,10 +101,10 @@ impl GameInfo {
         let region = self.get_region().unwrap_or("");
         let title = crate::capitalize_first_letters(self.title.to_lowercase());
         let title = match (self.patch.as_deref(), region) {
-            (Some(patch), "") => format!("{} ({})", title, patch),
-            (Some(patch), region) => format!("{} {} ({})", title, region, patch),
+            (Some(patch), "") => format!("{title} ({patch})"),
+            (Some(patch), region) => format!("{title} {region} ({patch})"),
             (None, "") => title,
-            (None, region) => format!("{} {}", title, region),
+            (None, region) => format!("{title} {region}"),
         };
         title.into()
     }
@@ -115,7 +114,7 @@ impl GameInfo {
         REGION_MAP.get(region_code).map(|v| &**v)
     }
     /// loads game information from srm name
-    pub fn from_filename(srm: &FileNameInfo, conn: &Connection) -> Result<Option<GameInfo>> {
+    pub fn from_filename(srm: &FileNameInfo, conn: &Connection) -> Result<Option<Self>> {
         let title = &*srm.title.to_uppercase();
         let games = conn
             .prepare(*QUERY_FROM_FILENAME)?
@@ -123,15 +122,15 @@ impl GameInfo {
             .bind((1, title))?
             .bind((2, title))?
             .map(|rrow| {
-                rrow.map(|row| GameInfo {
+                rrow.map(|row| Self {
                     code: row.read::<&str, _>("code").into(),
                     title: row.read::<&str, _>("title").into(),
                     lang: row.read::<&str, _>("language").into(),
-                    patch: row.read::<Option<&str>, _>("patch").map(|s| s.into()),
+                    patch: row.read::<Option<&str>, _>("patch").map(Into::into),
                     region_code: row.read::<&str, _>("region_code").into(),
                 })
             })
-            .collect::<Result<Vec<GameInfo>, sqlite::Error>>()?;
+            .collect::<Result<Vec<Self>, sqlite::Error>>()?;
 
         // If the srm has a patch, try to find a game with the same patch first.
         if let Some(patch) = srm.patch.as_deref() {
@@ -148,14 +147,13 @@ impl GameInfo {
         // If no game with the same patch was found, try to find a game with the same region.
         let code_prefixes = REGION_MAP_REV
             .get(&*srm.region)
-            .ok_or(anyhow!("region {} not found in database", srm.region))?;
+            .ok_or_else(|| anyhow!("region {} not found in database", srm.region))?;
 
         let game = games.into_iter().find(|game| {
-            let code_prefix = game.code.split_once('-').map(|(prefix, _)| prefix);
-            match code_prefix {
-                Some(prefix) => code_prefixes.contains(&prefix),
-                None => false,
-            }
+            game.code
+                .split_once('-')
+                .map(|(prefix, _)| prefix)
+                .is_some_and(|prefix| code_prefixes.contains(&prefix))
         });
 
         Ok(game)
@@ -167,9 +165,7 @@ pub fn get_region<S: AsRef<str> + std::fmt::Debug>(code: S) -> Result<Option<&'s
     let region_code = code
         .as_ref()
         .split_once('-')
-        .ok_or(anyhow!(
-            "{code:?} does not following code naming convention"
-        ))?
+        .ok_or_else(|| anyhow!("{code:?} does not following code naming convention"))?
         .0;
     Ok(REGION_MAP.get(region_code).map(|v| &**v))
 }

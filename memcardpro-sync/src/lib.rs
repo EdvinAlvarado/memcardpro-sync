@@ -7,16 +7,15 @@ use std::sync::Arc;
 
 pub fn capitalize_first<S: AsRef<str>>(s: S) -> String {
     let mut c = s.as_ref().chars();
-    match c.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().collect::<String>() + c.as_str(),
-    }
+    c.next().map_or_else(String::new, |first| {
+        first.to_uppercase().collect::<String>() + c.as_str()
+    })
 }
 
 pub fn capitalize_first_letters<S: AsRef<str>>(text: S) -> String {
     text.as_ref()
         .split_whitespace()
-        .map(|word| capitalize_first(word))
+        .map(capitalize_first)
         .collect::<Vec<String>>()
         .join(" ")
 }
@@ -80,13 +79,15 @@ impl SaveFile {
     pub fn from_filename(path: PathBuf, conn: &Connection) -> Result<Option<Self>> {
         let filename = path
             .file_name()
-            .ok_or(anyhow!("path has no file name"))?
+            .ok_or_else(|| anyhow!("path has no file name"))?
             .to_string_lossy();
 
-        let caps = SRM_RE.captures(&filename).ok_or(anyhow!(
-            "srm name does not follow naming convention: {}",
-            path.display()
-        ))?;
+        let caps = SRM_RE.captures(&filename).ok_or_else(|| {
+            anyhow!(
+                "srm name does not follow naming convention: {}",
+                path.display()
+            )
+        })?;
 
         let title = caps["title"].into();
         let region = caps["region"].into();
@@ -101,14 +102,11 @@ impl SaveFile {
         };
 
         let game = database::GameInfo::from_filename(&filename_info, conn)?;
-        Ok(match game {
-            Some(game) => Some(SaveFile {
-                path,
-                savenum,
-                game,
-            }),
-            None => None,
-        })
+        Ok(game.map(|game| Self {
+            path,
+            savenum,
+            game,
+        }))
     }
     /// Creates emulator-friendly save file name from memcardpro save file name.
     pub fn get_filename(&self) -> Box<str> {

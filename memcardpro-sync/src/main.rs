@@ -1,14 +1,6 @@
-use std::{
-    collections::HashMap,
-    fs::{self, File},
-    io::{self, BufRead, BufReader},
-    net::Ipv4Addr,
-    path::Path,
-    path::PathBuf,
-    process::Command,
-};
+use std::{path::Path, path::PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use main_error::MainError;
 use sqlite::Connection;
@@ -75,10 +67,10 @@ fn find_mcds<P: AsRef<Path>>(src: P, conn: &Connection) -> Result<Vec<SaveFile>>
     let ps1_dir = src.as_ref().to_path_buf();
 
     let mut mcd_files = Vec::new();
-    for entry in fs::read_dir(ps1_dir)? {
+    for entry in std::fs::read_dir(ps1_dir)? {
         let entry = entry?;
         if entry.path().is_dir() && !entry.file_name().to_string_lossy().contains("MemoryCard") {
-            for file in fs::read_dir(entry.path())? {
+            for file in std::fs::read_dir(entry.path())? {
                 let file = file?;
                 if file.path().is_file() {
                     let savefile = SaveFile::from_memcardpro(file.path(), conn)?;
