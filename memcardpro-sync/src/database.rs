@@ -85,7 +85,7 @@ impl GameInfo {
             .bind((1, code.as_ref()))?
             .bind((2, code.as_ref()))?
             .map(|rrow| {
-                rrow.map(|row| GameInfo {
+                rrow.map(|row| Self {
                     code: row.read::<&str, _>("code").into(),
                     title: row.read::<&str, _>("title").into(),
                     lang: row.read::<&str, _>("language").into(),
