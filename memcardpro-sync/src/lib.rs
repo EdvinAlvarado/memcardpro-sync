@@ -76,7 +76,7 @@ impl SaveFile {
     ///
     /// # Errors
     /// 1. If the file name does not follow the naming convention.
-    pub fn from_filename(path: PathBuf, conn: &Connection) -> Result<Option<Self>> {
+    pub fn from_filename(path: PathBuf, conn: &Connection) -> Result<Self> {
         let filename = path
             .file_name()
             .ok_or_else(|| anyhow!("path has no file name"))?
@@ -101,12 +101,13 @@ impl SaveFile {
             savenum,
         };
 
-        let game = database::GameInfo::from_filename(&filename_info, conn)?;
-        Ok(game.map(|game| Self {
+        let game = database::GameInfo::from_filename(&filename_info, conn)?
+            .ok_or_else(|| anyhow!("game not found in database for filename: {filename_info:?}"))?;
+        Ok(Self {
             path,
             savenum,
             game,
-        }))
+        })
     }
     /// Creates emulator-friendly save file name from memcardpro save file name.
     pub fn get_filename(&self) -> Box<str> {
