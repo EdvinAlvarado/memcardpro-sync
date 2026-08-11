@@ -20,6 +20,13 @@ pub fn capitalize_first_letters<S: AsRef<str>>(text: S) -> String {
         .join(" ")
 }
 
+pub fn copy_modified_time<P: AsRef<Path>>(src: P, des: P) -> Result<()> {
+    let modified_time = std::fs::metadata(src.as_ref())?.modified()?;
+    let file = std::fs::File::open(des.as_ref())?;
+    file.set_modified(modified_time)
+        .map_err(|_| anyhow!("failed to set modified time for {}", des.as_ref().display()))
+}
+
 #[allow(clippy::unwrap_used)]
 static SRM_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r"^(?P<title>.+?)\s+(?P<region>\([^)]+\))(?:\s+\((?P<patch>[^)]+)\))?_(?P<savenum>\d+)\.mcd$"
@@ -112,9 +119,7 @@ impl SaveFile {
     /// Creates emulator-friendly save file name from memcardpro save file name.
     pub fn get_filename(&self) -> Box<str> {
         let title = self.game.get_title();
-
-        let filename = format!("{title}_{savenum}.mcd", savenum = self.savenum);
-        filename.into()
+        format!("{title}_{savenum}.mcd", savenum = self.savenum).into_boxed_str()
     }
     /// get memcardpro save file name from emulator-friendly save file name.
     pub fn get_memcardpro_filename(&self) -> Box<str> {
@@ -136,6 +141,7 @@ impl SaveFile {
         new_save_path.push(filename.as_ref());
         std::fs::create_dir_all(save_path)?;
         std::fs::copy(&self.path, &new_save_path)?;
+        copy_modified_time(&self.path, &new_save_path)?;
         println!(
             "Copied: {}\t->\t{}",
             self.path.display(),
@@ -151,12 +157,11 @@ impl SaveFile {
     pub fn write_to_memcardpro(&self, memcardpro_path: &Path) -> Result<()> {
         let filename = self.get_memcardpro_filename();
         let mut des = memcardpro_path.to_path_buf();
-
         des.push(self.game.code.as_ref());
         std::fs::create_dir_all(&des)?;
-
         des.push(filename.as_ref());
         std::fs::copy(&self.path, &des)?;
+        copy_modified_time(&self.path, &des)?;
         println!("Copied: {}\t->\t{}", self.path.display(), des.display());
         Ok(())
     }
@@ -204,7 +209,7 @@ mod tests {
     fn savefile_translate_test() {
         let path = PathBuf::from("~/Documents/saves/psx/Ape Escape (USA)_1.mcd");
         let conn = sqlite::open("data/ps1_games.sqlite3").unwrap();
-        let savefile = SaveFile::from_filename(path, &conn).unwrap().unwrap();
+        let savefile = SaveFile::from_filename(path, &conn).unwrap();
         let filename = savefile.get_memcardpro_filename();
         println!("filename: {}", filename);
         assert_eq!(filename, "SCUS-94423-1.mcd".into());
@@ -215,7 +220,7 @@ mod tests {
             "~/Documents/saves/psx/Final Fantasy Tactics (USA) (patched TLWotL v1.02)_1.mcd",
         );
         let conn = sqlite::open("data/ps1_games.sqlite3").unwrap();
-        let savefile = SaveFile::from_filename(path, &conn).unwrap().unwrap();
+        let savefile = SaveFile::from_filename(path, &conn).unwrap();
         assert_eq!(
             savefile.get_memcardpro_filename(),
             "TLWL-94221-1.mcd".into()
