@@ -85,4 +85,18 @@ fn find_mcds<P: AsRef<Path>>(src: P, conn: &Connection) -> Result<Vec<SaveFile>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memcard_to_saves_test() {
+        let conn = sqlite::open("data/ps1_games.sqlite3").unwrap();
+        let mcd_files = find_mcds("tests/memcardpro", &conn).unwrap();
+        for savefile in mcd_files {
+            savefile.write_to_saves(Path::new("tests/saves")).unwrap();
+        }
+        let count = std::fs::read_dir("tests/saves")
+            .unwrap()
+            .filter(|entry| entry.as_ref().map(|e| e.path().is_file()).unwrap_or(false))
+            .count();
+        assert_eq!(count, 2);
+    }
 }
