@@ -3,6 +3,9 @@ name = "memcardpro-sync"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+strip = true # Automatically strip symbols from the binary
+
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4", features = ["derive"] }
