@@ -88,7 +88,7 @@ impl GameInfo {
             .transpose()?;
         Ok(info)
     }
-    /// Turn Rows into GameInfo
+    /// Turn sqlite Rows into GameInfo
     fn from_row(row: sqlite::Row) -> Self {
         Self {
             code: row.read::<&str, _>("code").into(),
