@@ -83,18 +83,20 @@ impl GameInfo {
             .into_iter()
             .bind((1, code.as_ref()))?
             .bind((2, code.as_ref()))?
-            .map(|rrow| {
-                rrow.map(|row| Self {
-                    code: row.read::<&str, _>("code").into(),
-                    title: row.read::<&str, _>("title").into(),
-                    lang: row.read::<&str, _>("language").into(),
-                    patch: row.read::<Option<&str>, _>("patch").map(Into::into),
-                    region_code: row.read::<&str, _>("region_code").into(),
-                })
-            })
+            .map(|rrow| rrow.map(|row| GameInfo::from_row(row)))
             .nth(0)
             .transpose()?;
         Ok(info)
+    }
+    /// Turn Rows into GameInfo
+    fn from_row(row: sqlite::Row) -> Self {
+        Self {
+            code: row.read::<&str, _>("code").into(),
+            title: row.read::<&str, _>("title").into(),
+            lang: row.read::<&str, _>("language").into(),
+            patch: row.read::<Option<&str>, _>("patch").map(Into::into),
+            region_code: row.read::<&str, _>("region_code").into(),
+        }
     }
     /// Contruct title
     pub fn get_title(&self) -> Box<str> {
@@ -121,15 +123,7 @@ impl GameInfo {
             .into_iter()
             .bind((1, title))?
             .bind((2, title))?
-            .map(|rrow| {
-                rrow.map(|row| Self {
-                    code: row.read::<&str, _>("code").into(),
-                    title: row.read::<&str, _>("title").into(),
-                    lang: row.read::<&str, _>("language").into(),
-                    patch: row.read::<Option<&str>, _>("patch").map(Into::into),
-                    region_code: row.read::<&str, _>("region_code").into(),
-                })
-            })
+            .map(|rrow| rrow.map(|row| GameInfo::from_row(row)))
             .collect::<Result<Vec<Self>, sqlite::Error>>()?;
 
         // If the srm has a patch, try to find a game with the same patch first.
